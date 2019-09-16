@@ -1,0 +1,8 @@
+<?php
+
+return [
+    'TWITTER_CONSUMER_KEY' => env('TWITTER_CONSUMER_KEY', 'Laravel'),
+    'TWITTER_CONSUMER_SECRET' => env('TWITTER_CONSUMER_SECRET', 'Laravel'),
+    'TWITTER_ACCESS_TOKEN' => env('TWITTER_ACCESS_TOKEN', 'Laravel'),
+    'TWITTER_ACCESS_TOKEN_SECRET' => env('TWITTER_ACCESS_TOKEN_SECRET', 'Laravel'),
+];

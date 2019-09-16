@@ -1,0 +1,54 @@
+"A datetime string with format `Y-m-d H:i:s`, e.g. `2018-01-01 13:00:00`."
+scalar DateTime @scalar(class: "Nuwave\\Lighthouse\\Schema\\Types\\Scalars\\DateTime")
+
+"A date string with format `Y-m-d`, e.g. `2011-05-23`."
+scalar Date @scalar(class: "Nuwave\\Lighthouse\\Schema\\Types\\Scalars\\Date")
+
+type Query {
+    tip(queryOrder: QueryOrder @orderBy): Trend @first(model: "App\\Model\\Trend")
+    timeTrend(
+        trend_time: TimeRange @whereBetween,
+        limit: Int @builder(method: "App\\GraphQL\\Builder\\Builder@limit")): [Trend!]!
+        @all(model: "App\\Model\\Trend")
+    trends: [Trend!]! @paginate(type: "paginator", model: "App\\Model\\Trend")
+    trendVolumes(trend_word_id: Int! @eq): [Trend!]!
+        @paginate(type: "paginator", model: "App\\Model\\Trend")
+    trendword(trend_word: String @where(operator: "like")): [TrendWord!]!
+        @paginate(type: "paginator", model: "App\\Model\\TrendWord")
+}
+
+type User {
+    id: ID!
+    name: String!
+    email: String!
+    created_at: DateTime!
+    updated_at: DateTime!
+}
+
+type Trend {
+    id: ID!
+    trend_word_id: Int!
+    trendWord: TrendWord! @hasOne
+    tweet_volume: Int
+    trend_time: DateTime!
+}
+
+type TrendWord {
+    id: ID!
+    trend_word: String!
+}
+
+input QueryOrder {
+    column: String!
+    order: Order = ASC
+}
+
+input TimeRange {
+    from: String!
+    to: String!
+}
+
+enum Order {
+    ASC @enum(value: "ASC")
+    DESC @enum(value: "DESC")
+}

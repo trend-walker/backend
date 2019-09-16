@@ -1,0 +1,53 @@
+kind: pipeline
+name: trendwalker_backend
+
+clone:
+  disable: true
+
+trigger:
+  branch:
+  - master
+  event:
+  - push
+
+volumes:
+- name: docker_sock
+  host:
+    path: /var/run/docker.sock
+    volumes:
+
+steps:
+- name: update
+  image: docker/compose:1.24.1
+  volumes:
+  - name: docker_sock
+    path: /var/run/docker.sock
+  environment:
+    GIT_HOST:
+      from_secret: GIT_HOST
+    GIT_USER:
+      from_secret: GIT_USER
+    GIT_PASS:
+      from_secret: GIT_PASS
+  commands:
+  - PROJECT=tw-be
+  - echo 'cd /var/www/trendwalker' > update.sh
+  - echo "if [ -e $PROJECT ]; then" >> update.sh
+  - echo "  cd $PROJECT" >> update.sh
+  - echo "  git pull http://$GIT_USER:$GIT_PASS@$GIT_HOST/$DRONE_REPO" >> update.sh
+  - echo 'else' >> update.sh
+  - echo "  git clone --depth 1 http://$GIT_USER:$GIT_PASS@$GIT_HOST/$DRONE_REPO $PROJECT" >> update.sh
+  - echo 'fi' >> update.sh
+  - docker exec gogs_util_1 sh -c "$(cat update.sh)"
+  - docker exec gogs_util_1 sh -c 'cp /var/dotenv/tw-be.env /var/www/trendwalker/tw-be/.env'
+  
+- name: deploy
+  image: docker/compose:1.24.1
+  volumes:
+  - name: docker_sock
+    path: /var/run/docker.sock
+  commands:
+  - echo 'cd /var/www/trendwalker/tw-be' > deploy.sh
+  - echo "composer install --no-dev" >> deploy.sh
+  - docker exec -u laradock tw-be_workspace_1 bash -c "$(cat deploy.sh)"
+
