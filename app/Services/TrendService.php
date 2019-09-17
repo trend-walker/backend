@@ -196,8 +196,7 @@ SQL;
       return [
         'status' => 200,
         'date' => $date,
-        'trend_word' => $trendWord->trend_word,
-        'word_cloud' => file_exists(storage_path() . "/app/public/word-cloud/{$date}/{$trendWordId}.svg")
+        'trend_word' => $trendWord->trend_word
       ];
     }
   }
@@ -297,7 +296,7 @@ SQL;
       }
     }
 
-    $list=[];
+    $list = [];
     foreach ($tweets as $idStr => $tw) {
       $list[] = ['id_str' => (string) $idStr, 'favorite' => (int) $tw['favorite_count'], 'retweet' => (int) $tw['retweet_count']];
     }
@@ -307,6 +306,7 @@ SQL;
 
   /**
    * 重み付きトレンドワード from archive file
+   * キャッシュあり
    * 
    * @param string $date
    * @param int $trendId
@@ -314,6 +314,8 @@ SQL;
    */
   public function analyseDailyTrendTweets($date, $trendWordId)
   {
+    $cacheFile = storage_path() . "/app/public/word-cloud/{$date}/{$trendWordId}.json";
+
     $from = (new Datetime($date))->format('Y-m-d 00:00:00');
     $to = (new Datetime($date))->format('Y-m-d 23:59:59');
 
@@ -325,6 +327,16 @@ SQL;
 
     if (empty($trends) || empty($trendWord)) {
       return ['status' => 'notfound', 'message', 'データが見つかりません。'];
+    }
+
+    // キャッシュチェック
+    if (file_exists($cacheFile)) {
+      return [
+        'status' => 'success',
+        'date' => $date,
+        'trend_word' => $trendWord->trend_word,
+        'words' => json_decode(file_get_contents($cacheFile))
+      ];
     }
 
     // 範囲内のファイルをデコードし重複を取り除く
@@ -357,6 +369,10 @@ SQL;
     if (file_exists($src)) {
       unlink($src);
     }
+
+    // キャッシュ作成
+    File::makeDirectory(pathinfo($cacheFile, PATHINFO_DIRNAME), 0775, true, true);
+    file_put_contents($cacheFile, json_encode($list));
 
     return ['status' => 'success', 'date' => $date, 'trend_word' => $trendWord->trend_word, 'words' => $list];
   }
@@ -427,7 +443,7 @@ SQL;
   }
 
   /**
-   * ユーザ生成SVGの取り込み
+   * ユーザ生成SVGの取り込み (廃止)
    * チェック、フィルタして取り込み
    *
    * @param string $date
@@ -502,7 +518,7 @@ SQL;
   function searchTrendWord($word, $page, $maxPerPage = 15)
   {
     Log::debug("searchTrendWord: $word");
-    
+
     $total = <<<SQL
       select count(id) as count
       from trend_words
@@ -566,6 +582,7 @@ SQL;
       from trends t
       where t.trend_word_id = :id
       group by DATE_FORMAT(t.trend_time, '%Y-%m-%d')
+      order by DATE_FORMAT(t.trend_time, '%Y-%m-%d') desc
       limit :limit
       offset :offset
 SQL;

@@ -19,7 +19,7 @@ Route::group(['middleware' => ['api']], function () {
     // Route::get('/thattime', 'TrendWalkerController@thattime')->name('api.thattime.get');
 
     // user gen svg
-    Route::post('/gen_svg', 'TrendWalkerController@generateSvg')->name('tweets.generateSvg')->middleware(\Barryvdh\Cors\HandleCors::class);
+    // Route::post('/gen_svg', 'TrendWalkerController@generateSvg')->name('tweets.generateSvg')->middleware(\Barryvdh\Cors\HandleCors::class);
 });
 
 Route::middleware('auth:api')->get('/user', function (Request $request) {
