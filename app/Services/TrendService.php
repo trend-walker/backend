@@ -247,11 +247,15 @@ SQL;
   {
     $sql = <<<SQL
       select
-        max(t.tweet_volume) as tweet_volume,
-        DATE_FORMAT(t.trend_time, '%Y-%m-%d %H') as trend_hour
-      from trends t
-      where t.trend_word_id = :id and t.trend_time between :from and :to
-      group by DATE_FORMAT(t.trend_time, '%Y-%m-%d %H')
+        max(v.tweet_volume) as tweet_volume,
+        v.trend_hour
+      from (
+        select
+          case when tweet_volume is null then 0 else tweet_volume end as tweet_volume,
+          DATE_FORMAT(trend_time, '%Y-%m-%d %H') as trend_hour
+        from trends
+        where trend_word_id = :id and trend_time between :from and :to ) as v
+      group by v.trend_hour
 SQL;
     return DB::select($sql, [
       'id' => $trendWordId,
@@ -331,12 +335,27 @@ SQL;
 
     // キャッシュチェック
     if (file_exists($cacheFile)) {
-      return [
-        'status' => 'success',
-        'date' => $date,
-        'trend_word' => $trendWord->trend_word,
-        'words' => json_decode(file_get_contents($cacheFile))
-      ];
+      $dateNow = Carbon::now();
+      $dateTarget = Carbon::parse($date);
+      $dateCreation = Carbon::createFromTimestamp(stat($cacheFile)['ctime']);
+
+      // 定期更新の5分後に合わせる
+      $dateCreation->second = 0;
+      $dateCreation->minute = 5 + 15 * (int) ($dateCreation->minute / 15);
+
+      // キャッシュ破棄条件 指定日から25時間以内 && 現在から15分以上経過
+      if ($dateTarget->gt($dateCreation->copy()->subHours(25)) && $dateNow->gt($dateCreation->copy()->addMinutes(15))) {
+        unlink($cacheFile);
+      } else {
+        // キャッシュから返す
+        return [
+          'status' => 'success',
+          'cache' => true,
+          'date' => $date,
+          'trend_word' => $trendWord->trend_word,
+          'words' => json_decode(file_get_contents($cacheFile))
+        ];
+      }
     }
 
     // 範囲内のファイルをデコードし重複を取り除く
@@ -374,7 +393,13 @@ SQL;
     File::makeDirectory(pathinfo($cacheFile, PATHINFO_DIRNAME), 0775, true, true);
     file_put_contents($cacheFile, json_encode($list));
 
-    return ['status' => 'success', 'date' => $date, 'trend_word' => $trendWord->trend_word, 'words' => $list];
+    return [
+      'status' => 'success',
+      'cache' => false,
+      'date' => $date,
+      'trend_word' => $trendWord->trend_word,
+      'words' => $list
+    ];
   }
 
   /**
