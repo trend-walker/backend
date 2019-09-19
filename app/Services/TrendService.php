@@ -265,7 +265,9 @@ SQL;
   }
 
   /**
-   * トレンドワードごとのツイートリスト from archive file
+   * トレンドワードごとのツイートリスト from archive file (廃止)
+   * 
+   * デイリートレンド解析に統合
    * 
    * @param string $date
    * @param int $trendId
@@ -309,8 +311,12 @@ SQL;
   }
 
   /**
-   * 重み付きトレンドワード from archive file
-   * キャッシュあり
+   * デイリートレンド解析 from archive file
+   * 
+   * ・重み付きトレンドワード
+   * ・時間別ツイート数
+   * ・人気のツイート
+   * ・キャッシュあり
    * 
    * @param string $date
    * @param int $trendId
@@ -318,7 +324,7 @@ SQL;
    */
   public function analyseDailyTrendTweets($date, $trendWordId)
   {
-    $cacheFile = storage_path() . "/app/public/word-cloud/{$date}/{$trendWordId}.json";
+    $cacheFile = storage_path() . "/app/public/analyze/{$date}/{$trendWordId}.json";
 
     $from = (new Datetime($date))->format('Y-m-d 00:00:00');
     $to = (new Datetime($date))->format('Y-m-d 23:59:59');
@@ -353,7 +359,7 @@ SQL;
           'cache' => true,
           'date' => $date,
           'trend_word' => $trendWord->trend_word,
-          'words' => json_decode(file_get_contents($cacheFile))
+          'analyze' => json_decode(file_get_contents($cacheFile))
         ];
       }
     }
@@ -368,37 +374,62 @@ SQL;
       } else {
         $data = [];
       }
-      foreach ($data as $idStr => $tw) {
-        $tweets[$idStr] = $tw['text'];
+      foreach ($data as $idStr => $tweet) {
+        $tweets[$idStr] = $tweet;
       }
     }
 
-    // リンク削除
+    // 重み付きトレンドワード
     $list = [];
-    foreach ($tweets as $text) {
-      $list[] = preg_replace('/https\:\/\/t\.co\/\w+/', '', $text);
+    foreach ($tweets as $idStr => $tweet) {
+      $list[] = preg_replace('/https\:\/\/t\.co\/\w+/', '', $tweet['text']);
     }
-
     $src = tempnam(storage_path(), 'src_');
     file_put_contents($src, join("", $list));
-
     try {
-      $list = $this->analyseText($src);
+      $wordWeights = $this->analyseText($src);
     } catch (Exception $e) { }
     if (file_exists($src)) {
       unlink($src);
     }
 
+    // 時間別ツイート数
+    $valuePerHour = array_pad([], 24, 0);
+    $dateFrom = Carbon::parse($from);
+    $dateTo = Carbon::parse($to);
+    foreach ($tweets as $idStr => $tweet) {
+      $date = Carbon::parse($tweet['created_at']);
+      $date->timezone('Asia/Tokyo');
+      if ($date->gte($dateFrom) && $date->lte($dateTo)) {
+        $valuePerHour[$date->hour]++;
+      }
+    }
+
+    // 人気のツイート
+    $idList = [];
+    foreach ($tweets as $idStr => $tweet) {
+      $idList[] = [
+        'id_str' => (string) $idStr,
+        'favorite' => (int) $tweet['favorite_count'],
+        'retweet' => (int) $tweet['retweet_count']
+      ];
+    }
+
     // キャッシュ作成
+    $analyze = [
+      'word_weights' => $wordWeights,
+      'value_per_hour' => $valuePerHour,
+      'id_list' => $idList
+    ];
     File::makeDirectory(pathinfo($cacheFile, PATHINFO_DIRNAME), 0775, true, true);
-    file_put_contents($cacheFile, json_encode($list));
+    file_put_contents($cacheFile, json_encode($analyze));
 
     return [
       'status' => 'success',
       'cache' => false,
       'date' => $date,
       'trend_word' => $trendWord->trend_word,
-      'words' => $list
+      'analyze' => $analyze
     ];
   }
 
