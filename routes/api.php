@@ -14,14 +14,10 @@ use Illuminate\Http\Request;
 */
 
 Route::group(['middleware' => ['api']], function () {
-    // Route::get('/trends', 'TrendWalkerController@trends')->name('api.trends.get');
-    // Route::get('/volumes', 'TrendWalkerController@volumes')->name('api.volumes.get');
-    // Route::get('/thattime', 'TrendWalkerController@thattime')->name('api.thattime.get');
-
-    // user gen svg
-    // Route::post('/gen_svg', 'TrendWalkerController@generateSvg')->name('tweets.generateSvg')->middleware(\Barryvdh\Cors\HandleCors::class);
+  // user gen svg
+  // Route::post('/gen_svg', 'TrendWalkerController@generateSvg')->name('tweets.generateSvg')->middleware(\Barryvdh\Cors\HandleCors::class);
 });
 
 Route::middleware('auth:api')->get('/user', function (Request $request) {
-    return $request->user();
+  return $request->user();
 });

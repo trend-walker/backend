@@ -8,88 +8,111 @@ use Illuminate\Support\Facades\File;
 
 use \SplFileObject;
 use \Datetime;
-use \DateTimeZone;
 use \Exception;
 use \Throwabe;
 use App\Model\Trend;
 use App\Model\TrendWord;
-use App\Model\Tweet;
-use App\Model\TrendTweet;
-use function GuzzleHttp\json_decode;
 use Carbon\Carbon;
-use SimpleXMLElement;
 
 class TrendService
 {
   /**
-   * Undocumented function (検証用)
-   * 
-   * @param string $time
-   * @return void
+   * latest trend time (検証用)
    */
-  public function trends($time)
+  public function latestTime()
   {
-    $dt = (new Datetime('@' . $time))->modify('+9 hours');
-    $fmt = 'Y-m-d H:i:s';
-    return ['trend_time' => $time, 'trends' => DB::table('trends')
-      ->join('trend_words', 'trend_words.id', '=', 'trends.trend_word_id')
-      ->whereBetween('trends.trend_time', [$dt->format($fmt), $dt->modify('+15 minutes')->format($fmt)])
-      ->select(['trend_word_id', 'trend_word', 'tweet_volume'])
-      ->get()];
+    $c = Carbon::parse(Trend::max('trend_time'));
+    $c->second = 0;
+    $c->minute = 15 * (int) ($c->minute / 15);
+    return ['latest_time' => $c->format('Y-m-d H:i:s')];
   }
 
   /**
-   * Undocumented function (検証用)
+   * volumes from wordId (検証用)
    * 
-   * @param int $wordId
-   * @return void
+   * @param int $trendWordId
    */
-  public function volumes($wordId)
+  public function volumes($trendWordId)
   {
-    $trendWord = TrendWord::where('id', $wordId)->first();
+    $trendWord = TrendWord::where('id', $trendWordId)->first();
+    if (empty($trendWord)) {
+      return ['status' => 'error', 'message' => 'trend_word_id not found'];
+    }
     return [
-      'id' => $wordId,
-      'word' => empty($trendWord) ? '' : $trendWord->trend_word,
+      'id' => $trendWordId,
+      'word' => $trendWord->trend_word,
       'volumes' => Trend::select(['tweet_volume', 'trend_time'])
-        ->where('trend_word_id', $wordId)
+        ->where('trend_word_id', $trendWordId)
         ->get()
-      // ->map(function($v){
-      //     return [$v['trend_time'], $v['tweet_volume']];
-      // })
     ];
   }
 
   /**
-   * Undocumented function (検証用)
+   * trend tweets from archive file (検証用)
    * 
    * @param int $trendId
-   * @return void
+   * @return string json
    */
-  public function thattime($trendId)
+  public function getTrendTweets($trendId)
   {
     $trend = Trend::where('id', $trendId)->first();
     if (empty($trend)) {
-      return ['id' => $trendId];
-    };
-    return [
-      'id' => $trendId,
-      'trend_time' => $trend->trend_time,
-      'stutuses' => DB::table('trend_tweets')
-        ->join('tweets', 'tweets.id_str', '=', 'trend_tweets.id_str')
-        ->where('trend_tweets.trend_id', $trendId)
-        ->selectRaw(
-          "JSON_EXTRACT(`tweet`, '$.retweet_count') as retweet"
-        )
-        ->selectRaw(
-          "JSON_EXTRACT(`tweet`, '$.favorite_count') as favorite"
-        )
-        ->selectRaw(
-          "JSON_EXTRACT(`tweet`, '$.text') as text"
-        )
-        ->get()
-      // ->pluck('tweet')
-      // ->map(function ($v){return json_decode($v);})
-    ];
+      return ['status' => 'error', 'message' => 'trend_id not found'];
+    }
+
+    $date = (new Datetime($trend->trend_time))->format('Y-m-d');
+    $filePath = storage_path() . "/app/archive/${date}/trend_tweets${trendId}.json.gz";
+    if (file_exists($filePath)) {
+      return join('', gzfile($filePath));
+    } else {
+      return ['status' => 'error', 'message' => 'trend arcive not found'];
+    }
+  }
+
+  /**
+   * 重み付きトレンドワード (検証用)
+   * data from archive file
+   * 
+   * @param int $trendId
+   * @return array
+   */
+  public function analyseTrendTweets($trendId)
+  {
+    $trend = Trend::where('id', $trendId)->first();
+    if (empty($trend)) {
+      return ['status' => 'error', 'message' => 'trend_id not found'];
+    }
+    $date = (new Datetime($trend->trend_time))->format('Y-m-d');
+    $filePath = storage_path() . "/app/archive/${date}/trend_tweets${trendId}.json.gz";
+    if (file_exists($filePath)) {
+      $data = json_decode(join('', gzfile($filePath)), true);
+    } else {
+      return ['status' => 'error', 'message' => 'trend arcive not found'];
+    }
+
+    $list = [];
+    foreach ($data as $tweet) {
+      $list[] = preg_replace(
+        '/https\:\/\/t\.co\/\w+/',
+        '',
+        array_key_exists('full_text', $tweet) ? $tweet['full_text'] : $tweet['text']
+      );
+    }
+
+    $src = tempnam(storage_path(), 'src_');
+    file_put_contents($src, join("", $list));
+
+    try {
+      $list = $this->analyseText($src);
+    } catch (Exception $e) {
+      Log::debug($e);
+      $list = ['status' => 'error', 'message' => 'trend analyse failed'];
+    }
+    if (file_exists($src)) {
+      unlink($src);
+    }
+
+    return $list;
   }
 
   /**
@@ -97,7 +120,7 @@ class TrendService
    * 
    * @param string $date
    * @param nunber $limit
-   * @return string josn
+   * @return array
    */
   public function dailyTrends($date, $limit = 10)
   {
@@ -108,8 +131,8 @@ class TrendService
     from trends a
     join trend_words b on a.trend_word_id=b.id
     where a.id in (
-      select DISTINCT
-        first_value(id) OVER (PARTITION BY trend_word_id ORDER BY tweet_volume) AS id
+      select distinct
+        first_value(id) OVER (partition by trend_word_id order by tweet_volume desc) AS id
       from trends
       where trend_time between :from and :to)
     order by tweet_volume desc limit :limit
@@ -122,41 +145,11 @@ SQL;
   }
 
   /**
-   * 最終更新日時
-   */
-  public function getLatestTime()
-  {
-    $c = Carbon::parse(Trend::max('trend_time'));
-    $c->second = 0;
-    $c->minute = 15 * (int) ($c->minute / 15);
-    return ['latest_time' => $c->format('Y-m-d H:i:s')];
-  }
-
-  /**
-   * Trend Tweets from archive file　(検証用)
-   * 
-   * @param int $trendId
-   * @return string josn
-   */
-  public function getTrendTweets($trendId)
-  {
-    $trend = Trend::where('id', $trendId)->first();
-
-    $day = (new Datetime($trend->trend_time))->format('Y-m-d');
-    $filePath = storage_path() . "/app/${day}/trend_tweets${trendId}.json.gz";
-    if (file_exists($filePath)) {
-      return join('', gzfile($filePath));
-    } else {
-      $data = [];
-    }
-  }
-
-  /**
    * トレンドワード
    * SSR用なのでHTTPステータスで返す
    * 
    * @param int $trendId
-   * @return array|null josn
+   * @return array|null
    */
   public function trendWord($trendWordId)
   {
@@ -172,12 +165,12 @@ SQL;
   }
 
   /**
-   * デイリー・個別トレンドワード・画像状態
+   * デイリー・個別トレンドワード
    * SSR用なのでHTTPステータスで返す
    * 
    * @param string $date
    * @param int $trendId
-   * @return array|null josn
+   * @return array|null
    */
   public function dailyTrendWord($date, $trendWordId)
   {
@@ -202,46 +195,11 @@ SQL;
   }
 
   /**
-   * 重み付きトレンドワード from archive file (検証用)
-   * 
-   * @param int $trendId
-   * @return string josn
-   */
-  public function analyseTrendTweets($trendId)
-  {
-    $trend = Trend::where('id', $trendId)->first();
-    $day = (new Datetime($trend->trend_time))->format('Y-m-d');
-    $filePath = storage_path() . "/app/${day}/trend_tweets${trendId}.json.gz";
-    if (file_exists($filePath)) {
-      $data = json_decode(join('', gzfile($filePath)), true);
-    } else {
-      $data = [];
-    }
-
-    $list = [];
-    foreach ($data as $tw) {
-      $list[] = preg_replace('/https\:\/\/t\.co\/\w+/', '', $tw['text']);
-    }
-
-    $src = tempnam(storage_path(), 'src_');
-    file_put_contents($src, join("", $list));
-
-    try {
-      $list = $this->analyseText($src);
-    } catch (Exception $e) { }
-    if (file_exists($src)) {
-      unlink($src);
-    }
-
-    return $list;
-  }
-
-  /**
    * ツイート件数
    * 
    * @param string $date
    * @param int $trendId
-   * @return array josn
+   * @return array
    */
   public function tweetVolume($date, $trendWordId)
   {
@@ -265,66 +223,21 @@ SQL;
   }
 
   /**
-   * トレンドワードごとのツイートリスト from archive file (廃止)
-   * 
-   * デイリートレンド解析に統合
-   * 
-   * @param string $date
-   * @param int $trendId
-   * @return array josn
-   */
-  public function dailyTrendTweets($date, $trendWordId)
-  {
-    $from = (new Datetime($date))->format('Y-m-d 00:00:00');
-    $to = (new Datetime($date))->format('Y-m-d 23:59:59');
-
-    $trends = Trend::where('trend_word_id', $trendWordId)
-      ->whereBetween('trends.trend_time', [$from, $to])
-      ->get();
-
-    $trendWord = TrendWord::find($trendWordId);
-
-    if (empty($trends) || empty($trendWord)) {
-      return ['status' => 'notfound', 'message', 'データが見つかりません。'];
-    }
-    // 範囲内のファイルをデコードし重複を取り除く
-    $tweets = [];
-    foreach ($trends as $trend) {
-      $id = $trend->id;
-      $filePath = storage_path() . "/app/${date}/trend_tweets${id}.json.gz";
-      if (file_exists($filePath)) {
-        $data = json_decode(join('', gzfile($filePath)), true);
-      } else {
-        $data = [];
-      }
-      foreach ($data as $idStr => $tw) {
-        $tweets[$idStr] = $tw;
-      }
-    }
-
-    $list = [];
-    foreach ($tweets as $idStr => $tw) {
-      $list[] = ['id_str' => (string) $idStr, 'favorite' => (int) $tw['favorite_count'], 'retweet' => (int) $tw['retweet_count']];
-    }
-
-    return ['status' => 'success', 'date' => $date, 'trend_word' => $trendWord->trend_word, 'tweets' => $list];
-  }
-
-  /**
-   * デイリートレンド解析 from archive file
+   * デイリートレンド解析
+   * date from archive file
    * 
    * ・重み付きトレンドワード
    * ・時間別ツイート数
    * ・人気のツイート
-   * ・キャッシュあり
+   * ・キャッシュ
    * 
    * @param string $date
    * @param int $trendId
-   * @return array josn
+   * @return array
    */
   public function analyseDailyTrendTweets($date, $trendWordId)
   {
-    $cacheFile = storage_path() . "/app/public/analyze/{$date}/{$trendWordId}.json";
+    $cacheFile = storage_path() . "/app/public/analyze/{$date}/{$trendWordId}.json.gz";
 
     $from = (new Datetime($date))->format('Y-m-d 00:00:00');
     $to = (new Datetime($date))->format('Y-m-d 23:59:59');
@@ -336,7 +249,7 @@ SQL;
     $trendWord = TrendWord::find($trendWordId);
 
     if (empty($trends) || empty($trendWord)) {
-      return ['status' => 'notfound', 'message', 'データが見つかりません。'];
+      return ['status' => 'error', 'message' => 'データが見つかりません。'];
     }
 
     // キャッシュチェック
@@ -359,7 +272,7 @@ SQL;
           'cache' => true,
           'date' => $date,
           'trend_word' => $trendWord->trend_word,
-          'analyze' => json_decode(file_get_contents($cacheFile))
+          'analyze' => json_decode(join('', gzfile($cacheFile)), true)
         ];
       }
     }
@@ -368,7 +281,7 @@ SQL;
     $tweets = [];
     foreach ($trends as $trend) {
       $id = $trend->id;
-      $filePath = storage_path() . "/app/${date}/trend_tweets${id}.json.gz";
+      $filePath = storage_path() . "/app/archive/${date}/trend_tweets${id}.json.gz";
       if (file_exists($filePath)) {
         $data = json_decode(join('', gzfile($filePath)), true);
       } else {
@@ -379,16 +292,27 @@ SQL;
       }
     }
 
+    if (empty($tweets)) {
+      return ['status' => 'error', 'message' => 'アーカイブが見つかりません。'];
+    }
+
     // 重み付きトレンドワード
     $list = [];
     foreach ($tweets as $idStr => $tweet) {
-      $list[] = preg_replace('/https\:\/\/t\.co\/\w+/', '', $tweet['text']);
+      $list[] = preg_replace(
+        '/https\:\/\/t\.co\/\w+/',
+        '',
+        array_key_exists('full_text', $tweet) ? $tweet['full_text'] : $tweet['text']
+      );
     }
     $src = tempnam(storage_path(), 'src_');
-    file_put_contents($src, join("", $list));
+    file_put_contents($src, join("\n", $list));
     try {
       $wordWeights = $this->analyseText($src);
-    } catch (Exception $e) { }
+    } catch (Exception $e) {
+      Log::error("analyseText: error.");
+      Log::debug($e);
+    }
     if (file_exists($src)) {
       unlink($src);
     }
@@ -422,7 +346,7 @@ SQL;
       'id_list' => $idList
     ];
     File::makeDirectory(pathinfo($cacheFile, PATHINFO_DIRNAME), 0775, true, true);
-    file_put_contents($cacheFile, json_encode($analyze));
+    file_put_contents($cacheFile, gzencode(json_encode($analyze), 9));
 
     return [
       'status' => 'success',
@@ -434,18 +358,22 @@ SQL;
   }
 
   /**
-   * analyseText from file
+   * analyse text from file
    *
    * @param string $textFile php-fpm(mecab)から見えるpathを指定すること
-   * @return string josn
+   * @return array
    */
   private function analyseText($textFile)
   {
-    $tmp = [];
     $dst = tempnam(storage_path(), 'dst_');
-    try {
-      exec("cat $textFile | mecab -d /var/www/neologd -o $dst", $output, $execRes);
+    exec("cat $textFile | mecab -d /var/www/neologd -o $dst", $output, $execRes);
+    if ($execRes != 0 || !file_exists($dst)) {
+      Log::error("analyseText: mecab error.");
+      return [];
+    }
 
+    $tmp = [];
+    try {
       $csv = new SplFileObject($dst);
       $csv->setFlags(SplFileObject::READ_CSV);
       while (!$csv->eof()) {
@@ -453,6 +381,7 @@ SQL;
         if (count($line) > 1) {
           $p = explode("\t", $line[0]);
           if (
+            count($p) > 1 &&
             in_array($p[1], ['名詞', '形容詞']) && !in_array($line[1], ['非自立', '数', '接尾', '代名詞', '特殊'])
           ) {
             $name = strtolower($p[0]);
@@ -471,6 +400,7 @@ SQL;
         $csv->next();
       }
     } catch (Exception $e) {
+      Log::error("analyseText: analyse error.");
       Log::debug($e);
     }
 
@@ -488,88 +418,23 @@ SQL;
           $count = $value;
         }
       }
-      // $list[$name] = $v[0];
-      // $list[] = [$name, $v[0], $v[2], $v[3]];
       $list[] = ['text' => $name, 'size' => $v[0]];
     }
     usort($list, function ($a, $b) {
       return $b['size'] - $a['size'];
     });
+
     return $list;
   }
 
   /**
-   * ユーザ生成SVGの取り込み (廃止)
-   * チェック、フィルタして取り込み
-   *
-   * @param string $date
-   * @param number $trendWordId
-   * @param string $svgText
-   * @return string josn
-   */
-  public function generateSvg($date, $trendWordId, $svgText)
-  {
-    $words = $this->analyseDailyTrendTweets($date, $trendWordId);
-    if ($words['status'] !== 'success') {
-      return;
-    }
-    $wordMap = [];
-    foreach ($words['words'] as $word) {
-      $wordMap[$word['text']] = 1;
-    }
-
-    $svg = [];
-    $svg[] = join('', [
-      '<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">',
-      '<svg width="960" height="480" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">',
-      '<g transform="translate(480, 240)">',
-    ]);
-    $svgSrc = new SimpleXMLElement($svgText);
-    foreach ($svgSrc->g->text as $t) {
-      $text = (string) $t[0];
-      if (!array_key_exists($text, $wordMap)) {
-        return [];
-        throw new Exception('iligal svg');
-      }
-      $attr = $t->attributes();
-      if (preg_match('/translate\(([\-\d]+),([\-\d]+)\)/', $attr['transform'], $translate) !== 1) {
-        throw new Exception('iligal svg');
-      };
-      if (preg_match('/rotate\(([\-\d]+)\)/', $attr['transform'], $rotate) !== 1) {
-        throw new Exception('iligal svg');
-      };
-      if (preg_match('/font-size: (\d+px);/', $attr['style'], $size) !== 1) {
-        throw new Exception('iligal svg');
-      };
-      if (preg_match('/rgb\((\d+), (\d+), (\d+)\);/', $attr['style'], $rgb) !== 1) {
-        throw new Exception('iligal svg');
-      };
-      $svg[] = join('', [
-        "<text text-anchor=\"middle\" transform=\"translate({$translate[1]},{$translate[2]})rotate({$rotate[1]})\"",
-        " style=\"font-size: {$size[1]}; font-family: Impact; fill: rgb({$rgb[1]}, {$rgb[2]}, {$rgb[3]});\">{$text}</text>"
-      ]);
-    }
-    $svg[] = '</g></svg>';
-
-    $dir = storage_path() . "/app/public/word-cloud/{$date}";
-    $file = "{$trendWordId}.svg";
-    File::makeDirectory($dir, 0775, true, true);
-    if (file_exists("$dir/$file")) {
-      unlink("$dir/$file");
-    }
-    file_put_contents("$dir/$file", join('', $svg));
-
-    return 'ok';
-  }
-
-  /**
    * トレンドワード検索
-   * 
    * ワード一覧
    * 
    * @param string $word 検索ワード
-   * @param number $page
-   * @param number $maxPerPage ページ当たり件数
+   * @param int $page
+   * @param int $maxPerPage ページ当たり件数
+   * @return array
    */
   function searchTrendWord($word, $page, $maxPerPage = 15)
   {
@@ -608,13 +473,13 @@ SQL;
   /**
    * トレンドワードが含まれる日
    * 
-   * @param number $trendWordId
-   * @param number $page
-   * @param number $maxPerPage ページ当たり件数
+   * @param int $trendWordId
+   * @param int $page
+   * @param int $maxPerPage ページ当たり件数
+   * @return array
    */
   function searchTrendWordDate($trendWordId, $page, $maxPerPage = 15)
   {
-
     $trendWord = TrendWord::find($trendWordId);
 
     if (empty($trendWord)) {

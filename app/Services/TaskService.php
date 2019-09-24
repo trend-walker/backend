@@ -3,17 +3,13 @@
 namespace App\Services;
 
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\File;
 use Abraham\TwitterOAuth\TwitterOAuth;
 
 use \Datetime;
-use \DateTimeZone;
-use \Exception;
-use \Throwabe;
 use App\Model\Trend;
 use App\Model\TrendWord;
-use App\Model\Tweet;
 use App\Model\TrendTweet;
-use Carbon\Carbon;
 
 class TaskService
 {
@@ -37,7 +33,7 @@ class TaskService
   /**
    * トレンドを保存
    *
-   * @param [type] $data
+   * @param array $data
    * @return void
    */
   public function saveTrendData($data)
@@ -68,9 +64,9 @@ class TaskService
   }
 
   /**
-   * Undocumented function
+   * ツイート保存
    *
-   * @param [type] $data
+   * @param array $data
    * @param integer $trendId
    * @return void
    */
@@ -89,10 +85,9 @@ class TaskService
 
     // ストレージに保存
     $date = (new Datetime())->format('Y-m-d');
-    if (!file_exists(storage_path() . "/app/${date}")) {
-      mkdir(storage_path() . "/app/${date}");
-    }
-    file_put_contents(storage_path() . "/app/${date}/trend_tweets${trendId}.json.gz", gzencode(json_encode($tweets), 9));
+    $filePath = storage_path() . "/app/archive/${date}/trend_tweets${trendId}.json.gz";
+    File::makeDirectory(pathinfo($filePath, PATHINFO_DIRNAME), 0775, true, true);
+    file_put_contents($filePath, gzencode(json_encode($tweets), 9));
 
     // 以下、現状使用しない
     if (true) {

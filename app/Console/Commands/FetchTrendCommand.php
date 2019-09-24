@@ -37,7 +37,7 @@ class FetchTrendCommand extends Command
     public function __construct(TaskService $taskService)
     {
         parent::__construct();
-        $this->taskService=$taskService;
+        $this->taskService = $taskService;
     }
 
     /**
@@ -49,25 +49,27 @@ class FetchTrendCommand extends Command
     {
         Log::info('fetch trends start.');
         try {
-            $connection=$this->taskService->getApiConnection();
-            
+            $connection = $this->taskService->getApiConnection();
+
             $content = $connection->get("trends/place", ['id' => 23424856]);
-            $list=$this->taskService->saveTrendData($content[0]);
+            $list = $this->taskService->saveTrendData($content[0]);
             Log::info('save trends.');
-            
+
             foreach ($list as $id => $word) {
                 $content = $connection->get("search/tweets", [
                     'q' => $word,
                     'lang' => 'ja',
                     'locale' => 'ja',
                     'result_type' => 'mixed',
+                    'tweet_mode' => 'extended',
                     'count' => 100,
                 ]);
                 $this->taskService->saveTrendTweets($content, $id);
             }
             Log::info('fetch trends over.');
         } catch (Throwable $e) {
-            Log::info($e);
+            Log::info('fetch failure.');
+            Log::debug($e);
         }
     }
 }
