@@ -70,7 +70,7 @@ class ArchiveCommand extends Command
         Log::error('error');
         Log::debug('debug');
     }
-    
+
     /**
      * デイリートレンド 解析データ一括生成
      *
@@ -79,12 +79,18 @@ class ArchiveCommand extends Command
      */
     private function dailyAnalyze($date)
     {
-        $trends = $this->trendService->dailyTrends($date, 9999);
-        foreach ($trends as $i => $trend) {
-            echo sprintf("%d %d %s\n", $i + 1, $trend->trend_word_id, $trend->trend_word);
-            $this->trendService->analyseDailyTrendTweets($date, $trend->trend_word_id);
+        try {
+            Log::info("analyze $date daily trends start.");
+            $trends = $this->trendService->dailyTrends($date, 9999);
+            foreach ($trends as $i => $trend) {
+                echo sprintf("%d %d %s\n", $i + 1, $trend->trend_word_id, $trend->trend_word);
+                $this->trendService->analyseDailyTrendTweets($date, $trend->trend_word_id);
+            }
+            Log::info(sprintf('analyze %s daily %d trends end.', $date, count($trends)));
+        } catch (Throwable $e) {
+            Log::debug($e);
+            Log::info("analyze $date daily trends failure.");
         }
-
         echo "analyze generate over.\n";
     }
 

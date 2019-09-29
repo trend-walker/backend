@@ -44,6 +44,8 @@ Route::group(['prefix' => 'api'], function () {
     Route::get('/search_trend_word_date/{trendWordId}', 'TrendWalkerController@searchTrendWordDate')->name('trends.searchTrendWordDate');
     // search trend tweet volume
     Route::get('/tweet_volume/{date}/{trendWordId}', 'TrendWalkerController@tweetVolume')->name('trends.tweetVolume');
+    // related trends
+    Route::get('/related_daily_trends/{date}/{trendWordId}', 'TrendWalkerController@relatedDailyTrend')->name('tweets.relatedDailyTrend');
   });
 });
 

@@ -179,4 +179,15 @@ class TrendWalkerController extends Controller
     return response($this->trendService->tweetVolume($date, $trendWordId))
       ->header('Content-Type', 'application/json');
   }
+  
+  /**
+   * 関連トレンド
+   *
+   * @return void
+   */
+  public function relatedDailyTrend($date, $trendWordId)
+  {
+    return response($this->trendService->relatedDailyTrend($date, $trendWordId))
+      ->header('Content-Type', 'application/json');
+  }
 }

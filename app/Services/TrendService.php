@@ -518,4 +518,78 @@ SQL;
       'result' => DB::select($data, ['id' => $trendWordId, 'limit' => $maxPerPage, 'offset' => ($page - 1) * $maxPerPage])
     ];
   }
+
+  /**
+   * 関連デイリートレンド
+   *
+   * @param string $date
+   * @param int $trendId
+   * @return array
+   */
+  public function relatedDailyTrend($date, $trendWordId)
+  {
+    $cacheFile = storage_path() . "/app/public/analyze/{$date}/{$trendWordId}.json.gz";
+    $score = [];
+
+    if (
+      !file_exists($cacheFile) ||
+      !file_exists(pathinfo($cacheFile, PATHINFO_DIRNAME))
+    ) {
+      goto POST_CALC;
+    }
+
+    $base = json_decode(join('', gzfile($cacheFile)), true);
+    foreach (glob(pathinfo($cacheFile, PATHINFO_DIRNAME) . '/*.json.gz') as $file) {
+      $data = json_decode(join('', gzfile($file)), true);
+      $count = count($base['word_weights']) < count($data['word_weights']) ? count($base['word_weights']) : count($data['word_weights']);
+      $count = $count < 30 ? $count : 30;
+
+      // トレンド比較の最大スコア計算
+      $max = 0;
+      for ($i = 0; $i < $count; ++$i) {
+        $max += $base['word_weights'][$i]['size'] * $data['word_weights'][$i]['size'];
+      }
+
+      // トレンド比較スコア計算
+      $cur = 0;
+      for ($i = 0; $i < $count; ++$i) {
+        for ($n = 0; $n < $count; ++$n) {
+          if ($base['word_weights'][$i]['text'] == $data['word_weights'][$n]['text']) {
+            $cur += $base['word_weights'][$i]['size'] * $data['word_weights'][$n]['size'];
+            break;
+          }
+        }
+      }
+      $key = (int) pathinfo($file, PATHINFO_BASENAME);
+      if ($cur / $max > 0.24) {
+        $score[$key] = $cur / $max;
+      }
+    }
+
+    POST_CALC: $list = [];
+    if (!empty($score)) {
+      $trendWords = TrendWord::whereIn('id', array_keys($score))->get();
+      foreach ($trendWords as $trendWord) {
+        $list[] = [
+          'trend_word' => $trendWord->trend_word,
+          'trend_word_id' => $trendWord->id,
+          'score' => $score[$trendWord->id]
+        ];
+      }
+    }
+    usort($list, function ($a, $b) {
+      return $a['score'] == $b['score'] ? 0 : ($a['score'] < $b['score'] ? 1 : -1);
+    });
+
+    $dayBefore = Carbon::parse($date)->subDay()->format('Y-m-d');
+    $dayAfter = Carbon::parse($date)->addDay()->format('Y-m-d');
+    return [
+      'status' => 'success',
+      'date' => $date,
+      'day_before' => file_exists(storage_path() . "/app/public/analyze/{$dayBefore}/{$trendWordId}.json.gz") ? $dayBefore : null,
+      'day_after' => file_exists(storage_path() . "/app/public/analyze/{$dayAfter}/{$trendWordId}.json.gz") ? $dayAfter : null,
+      'trend_word_id' => $trendWordId,
+      'list' => $list
+    ];
+  }
 }

@@ -5,6 +5,7 @@ namespace App\Console;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Foundation\Console\Kernel as ConsoleKernel;
 use App\Console\Commands\FetchTrendCommand;
+use Illuminate\Support\Carbon;
 
 class Kernel extends ConsoleKernel
 {
@@ -25,7 +26,12 @@ class Kernel extends ConsoleKernel
      */
     protected function schedule(Schedule $schedule)
     {
-        //$schedule->command('trend:fetch')->everyMinute();
+        // デイリートレンド解析
+        $schedule->command(
+            sprintf('archive:manage analyze %s', Carbon::now()->subDay()->format('Y-m-d'))
+        )->dailyAt('1:05');
+
+        // トレンド取得
         $schedule->command('trend:fetch')->everyFifteenMinutes();
     }
 
@@ -36,7 +42,7 @@ class Kernel extends ConsoleKernel
      */
     protected function commands()
     {
-        $this->load(__DIR__.'/Commands');
+        $this->load(__DIR__ . '/Commands');
 
         require base_path('routes/console.php');
     }
