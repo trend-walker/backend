@@ -4,7 +4,6 @@ namespace App\Http\Controllers;
 
 use Request;
 
-use App\Services\TaskService;
 use App\Services\TrendService;
 
 class TrendWalkerController extends Controller
@@ -15,83 +14,13 @@ class TrendWalkerController extends Controller
   protected $trendService;
 
   /**
-   * @var TaskService
-   */
-  protected $taskService;
-
-  /**
-   * DesignController constructor.
+   * TrendWalkerController constructor.
    *
    * @param TrendService $trendService
    */
-  public function __construct(TrendService $trendService, TaskService $taskService)
+  public function __construct(TrendService $trendService)
   {
-    $this->taskService = $taskService;
     $this->trendService = $trendService;
-  }
-
-  /**
-   * search (検証用)
-   */
-  public function search($text)
-  {
-    if (config('app.APP_ENV')=='local') {
-      $connection = $this->taskService->getApiConnection();
-      $content = $connection->get("search/tweets", [
-        'q' => $text,
-        'lang' => 'ja',
-        'locale' => 'ja',
-        'result_type' => 'mixed',
-        'tweet_mode' => 'extended',
-        'count' => 100,
-      ]);
-      return response()->json($content);
-    } else {
-      return response()->json(['status' => 'suspend.']);
-    }
-  }
-
-  /**
-   * latest trend time (検証用)
-   */
-  public function latestTime()
-  {
-    return response($this->trendService->latestTime())
-      ->header('Content-Type', 'application/json');
-  }
-
-  /**
-   * volumes from trendWordId (検証用)
-   * 
-   * @param int $trendWordId
-   */
-  public function volumes($trendWordId)
-  {
-    return response($this->trendService->volumes($trendWordId))
-      ->header('Content-Type', 'application/json');
-  }
-
-  /**
-   * raw tweets from trendId (検証用)
-   * data from archive file
-   * 
-   * @param int $trendId
-   */
-  public function getTweets($trendId)
-  {
-    return response($this->trendService->getTrendTweets($trendId))
-      ->header('Content-Type', 'application/json');
-  }
-
-  /**
-   * 重み付きトレンドワード from trendId (検証用)
-   * 
-   * @param int $trendId
-   */
-  public function analyzeTweets($trendId)
-  {
-    return response($this->trendService->analyseTrendTweets($trendId))
-      ->header('Content-Type', 'application/json');
   }
 
   /**

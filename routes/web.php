@@ -14,16 +14,18 @@
 // 検証用
 Route::group(['prefix' => 'trial'], function () {
   Route::middleware(\Barryvdh\Cors\HandleCors::class)->group(function () {
-    // api search (local)
-    Route::get('/search/{text}', 'TrendWalkerController@search')->name('trial.get.search');
+    // twittter api trends (dev only)
+    Route::get('/twitter_api_get_trends', 'TrialController@getTresds')->name('trial.api.getTresds');
+    // twitter api search (dev only)
+    Route::get('/twitter_api_search_tweets/{text}', 'TrialController@searchTweets')->name('trial.api.searchTweets');
     // tweets from trend_id
-    Route::get('/latest_time', 'TrendWalkerController@latestTime')->name('trial.get.latestTrend');
+    Route::get('/latest_time', 'TrialController@latestTime')->name('trial.get.latestTrend');
     // volume from word id
-    Route::get('/volumes/{trendWordId}', 'TrendWalkerController@volumes')->name('trial.get.wordVolumes');
+    Route::get('/volumes/{trendWordId}', 'TrialController@volumes')->name('trial.get.wordVolumes');
     // tweets from trend_id
-    Route::get('/get_tweets/{trendId}', 'TrendWalkerController@getTweets')->name('trial.get.rawTweets');
+    Route::get('/get_tweets/{trendId}', 'TrialController@getTweets')->name('trial.get.rawTweets');
     // analyze from trend_id
-    Route::get('/analyze_tweets/{trendId}', 'TrendWalkerController@analyzeTweets')->name('trial.get.analyzeTrend');
+    Route::get('/analyze_tweets/{trendId}', 'TrialController@analyzeTweets')->name('trial.get.analyzeTrend');
   });
 });
 

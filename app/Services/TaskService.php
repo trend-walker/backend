@@ -2,44 +2,101 @@
 
 namespace App\Services;
 
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\File;
-use Abraham\TwitterOAuth\TwitterOAuth;
-
 use \Datetime;
+
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
+
 use App\Model\Trend;
 use App\Model\TrendWord;
 use App\Model\TrendTweet;
 
+use App\Services\TwitterApi;
+
+/**
+ * 定期処理用クラス
+ */
 class TaskService
 {
   /**
-   * get twitter api Connection
+   * @var TwitterApi
+   */
+  protected $twiterApi;
+
+  /**
+   * @var TrendService
+   */
+  protected $trendService;
+
+  /**
+   * TaskService コンストラクタ
    *
+   * @param TwitterApi $twiterApi
+   * @param TrendService $trendService
    * @return void
    */
-  public function getApiConnection()
+  public function __construct(TwitterApi $twiterApi, TrendService $trendService)
   {
-    $connection = new TwitterOAuth(
-      config('env.TWITTER_CONSUMER_KEY'),
-      config('env.TWITTER_CONSUMER_SECRET'),
-      config('env.TWITTER_ACCESS_TOKEN'),
-      config('env.TWITTER_ACCESS_TOKEN_SECRET')
-    );
-    $connection->setDecodeJsonAsArray(true);
-    return $connection;
+    $this->twiterApi = $twiterApi;
+    $this->trendService = $trendService;
+  }
+
+  /**
+   * 定期処理
+   * 
+   * @return array [int trend_id]
+   */
+  public function fetchTask()
+  {
+    $list = [];
+
+    // トレンド定期取得
+    Log::info('fetch trends start.');
+    try {
+      // トレンド取得
+      $content = $this->twiterApi->getTrends();
+      $list = $this->saveTrendData($content[0]);
+      Log::info('save trends.');
+
+      // トレンドワード検索
+      foreach ($list as $id => $word) {
+        $content = $this->twiterApi->searchTweets($word);
+        $this->saveTrendTweets($content, $id);
+      }
+      Log::info('fetch trends over.');
+    } catch (Throwable $e) {
+      Log::info('fetch failure.');
+      Log::debug($e);
+    }
+
+    $idList = array_keys($list);
+
+    // トレンドワード解析
+    if (!empty($idList)) {
+      Log::info('analyze top trends start.');
+      $date = Carbon::now()->format('Y-m-d');
+      $trends = Trend::whereIn('id', $idList)->get();
+      foreach ($trends as $trend) {
+        $this->trendService->analyseDailyTrendTweets($date, $trend->trend_word_id);
+      }
+      Log::info(sprintf('analyze top %d trends end.', count($idList)));
+    }
+
+    return $idList;
   }
 
   /**
    * トレンドを保存
    *
    * @param array $data
-   * @return void
+   * @return array [int trend_id => string trend_word]
    */
   public function saveTrendData($data)
   {
-    $tmp = [];
     try {
+      $res = [];
       DB::beginTransaction();
       foreach ($data['trends'] as $json) {
         $trendWord = TrendWord::where('trend_word', $json['name'])->first();
@@ -53,10 +110,10 @@ class TaskService
         $trend->tweet_volume = $json['tweet_volume'];
         $trend->trend_time = new Datetime();
         $trend->save();
-        $tmp[$trend->id] = $json['name'];
+        $res[$trend->id] = $json['name'];
       }
       DB::commit();
-      return $tmp;
+      return $res;
     } catch (Throwable $e) {
       DB::rollback();
     }
@@ -64,10 +121,10 @@ class TaskService
   }
 
   /**
-   * ツイート保存
+   * ツイートを保存
    *
    * @param array $data
-   * @param integer $trendId
+   * @param int $trendId
    * @return void
    */
   public function saveTrendTweets($data, int $trendId)
@@ -84,10 +141,14 @@ class TaskService
     ksort($tweets);
 
     // ストレージに保存
-    $date = (new Datetime())->format('Y-m-d');
-    $filePath = storage_path() . "/app/archive/${date}/trend_tweets${trendId}.json.gz";
-    File::makeDirectory(pathinfo($filePath, PATHINFO_DIRNAME), 0775, true, true);
-    file_put_contents($filePath, gzencode(json_encode($tweets), 9));
+    $arcPath = sprintf(
+      '%s/%s/trend_tweets%d.json.gz',
+      config('constants.archive_path'),
+      (new Datetime())->format('Y-m-d'),
+      $trendId
+    );
+    Storage::makeDirectory(pathinfo($arcPath, PATHINFO_DIRNAME));
+    Storage::put($arcPath, gzencode(json_encode($tweets), 9));
 
     // 以下、現状使用しない
     if (true) {

@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\File;
@@ -60,10 +61,15 @@ class TrendService
       return ['status' => 'error', 'message' => 'trend_id not found'];
     }
 
-    $date = (new Datetime($trend->trend_time))->format('Y-m-d');
-    $filePath = storage_path() . "/app/archive/${date}/trend_tweets${trendId}.json.gz";
-    if (file_exists($filePath)) {
-      return join('', gzfile($filePath));
+    $arcPath = sprintf(
+      '%s/%s/trend_tweets%d.json.gz',
+      config('constants.archive_path'),
+      (new Datetime($trend->trend_time))->format('Y-m-d'),
+      $trendId
+    );
+
+    if (Storage::exists($arcPath)) {
+      return gzdecode(Storage::get($arcPath));
     } else {
       return ['status' => 'error', 'message' => 'trend arcive not found'];
     }
@@ -82,10 +88,16 @@ class TrendService
     if (empty($trend)) {
       return ['status' => 'error', 'message' => 'trend_id not found'];
     }
-    $date = (new Datetime($trend->trend_time))->format('Y-m-d');
-    $filePath = storage_path() . "/app/archive/${date}/trend_tweets${trendId}.json.gz";
-    if (file_exists($filePath)) {
-      $data = json_decode(join('', gzfile($filePath)), true);
+
+    $arcPath = sprintf(
+      '%s/%s/trend_tweets%d.json.gz',
+      config('constants.archive_path'),
+      (new Datetime($trend->trend_time))->format('Y-m-d'),
+      $trendId
+    );
+
+    if (Storage::exists($arcPath)) {
+      $data = json_decode(gzdecode(Storage::get($arcPath)), true);
     } else {
       return ['status' => 'error', 'message' => 'trend arcive not found'];
     }
@@ -99,7 +111,7 @@ class TrendService
       );
     }
 
-    $src = tempnam(storage_path(), 'src_');
+    $src = tempnam(storage_path() . '/temp', 'mecab_src_');
     file_put_contents($src, join("", $list));
 
     try {
@@ -237,13 +249,12 @@ SQL;
    */
   public function analyseDailyTrendTweets($date, $trendWordId)
   {
-    $cacheFile = storage_path() . "/app/public/analyze/{$date}/{$trendWordId}.json.gz";
-
     $from = (new Datetime($date))->format('Y-m-d 00:00:00');
     $to = (new Datetime($date))->format('Y-m-d 23:59:59');
 
     $trends = Trend::where('trend_word_id', $trendWordId)
-      ->whereBetween('trends.trend_time', [$from, $to])
+      ->whereBetween('trend_time', [$from, $to])
+      ->orderBy('trend_time', 'desc')
       ->get();
 
     $trendWord = TrendWord::find($trendWordId);
@@ -253,26 +264,22 @@ SQL;
     }
 
     // キャッシュチェック
-    if (file_exists($cacheFile)) {
-      $dateNow = Carbon::now();
-      $dateTarget = Carbon::parse($date);
-      $dateCreation = Carbon::createFromTimestamp(stat($cacheFile)['ctime']);
-
-      // 定期更新に合わせる
-      $dateCreation->second = 0;
-      $dateCreation->minute = 15 * (int) ($dateCreation->minute / 15);
-
-      // キャッシュ破棄条件 指定日から25時間以内 && 現在から15分以上経過
-      if ($dateTarget->gt($dateCreation->copy()->subHours(25)) && $dateNow->gt($dateCreation->copy()->addMinutes(15))) {
-        unlink($cacheFile);
+    $cachePath = sprintf('%s/%s/%d.json.gz', config('constants.analyze_path'), $date, $trendWordId);
+    if (Storage::exists($cachePath)) {
+      // トレンド時間とキャッシュ更新時間を比較
+      $cacheTime = Carbon::createFromTimestamp(Storage::lastModified($cachePath));
+      $lastTrendTime = Carbon::parse($trends[0]->trend_time);
+      if ($cacheTime->lt($lastTrendTime)) {
+        // 更新があれば一旦削除
+        Storage::delete($cachePath);
       } else {
-        // キャッシュから返す
+        // 更新がなければキャッシュから返す
         return [
           'status' => 'success',
           'cache' => true,
           'date' => $date,
           'trend_word' => $trendWord->trend_word,
-          'analyze' => json_decode(join('', gzfile($cacheFile)), true)
+          'analyze' => json_decode(gzdecode(Storage::get($cachePath)), true)
         ];
       }
     }
@@ -280,10 +287,9 @@ SQL;
     // 範囲内のファイルをデコードし重複を取り除く
     $tweets = [];
     foreach ($trends as $trend) {
-      $id = $trend->id;
-      $filePath = storage_path() . "/app/archive/${date}/trend_tweets${id}.json.gz";
-      if (file_exists($filePath)) {
-        $data = json_decode(join('', gzfile($filePath)), true);
+      $arcPath = sprintf('%s/%s/trend_tweets%d.json.gz', config('constants.archive_path'), $date, $trend->id);
+      if (Storage::exists($arcPath)) {
+        $data = json_decode(gzdecode(Storage::get($arcPath)), true);
       } else {
         $data = [];
       }
@@ -291,7 +297,6 @@ SQL;
         $tweets[$idStr] = $tweet;
       }
     }
-
     if (empty($tweets)) {
       return ['status' => 'error', 'message' => 'アーカイブが見つかりません。'];
     }
@@ -305,7 +310,7 @@ SQL;
         array_key_exists('full_text', $tweet) ? $tweet['full_text'] : $tweet['text']
       );
     }
-    $src = tempnam(storage_path(), 'src_');
+    $src = tempnam(storage_path() . '/temp', 'mecab_src_');
     file_put_contents($src, join("\n", $list));
     try {
       $wordWeights = $this->analyseText($src);
@@ -345,8 +350,8 @@ SQL;
       'value_per_hour' => $valuePerHour,
       'id_list' => $idList
     ];
-    File::makeDirectory(pathinfo($cacheFile, PATHINFO_DIRNAME), 0775, true, true);
-    file_put_contents($cacheFile, gzencode(json_encode($analyze), 9));
+    Storage::makeDirectory(pathinfo($cachePath, PATHINFO_DIRNAME));
+    Storage::put($cachePath, gzencode(json_encode($analyze), 9));
 
     return [
       'status' => 'success',
@@ -365,7 +370,7 @@ SQL;
    */
   private function analyseText($textFile)
   {
-    $dst = tempnam(storage_path(), 'dst_');
+    $dst = tempnam(storage_path() . '/temp', 'mecab_dst_');
     exec("cat $textFile | mecab -d /var/www/neologd -o $dst", $output, $execRes);
     if ($execRes != 0 || !file_exists($dst)) {
       Log::error("analyseText: mecab error.");
@@ -441,9 +446,14 @@ SQL;
     Log::debug("searchTrendWord: $word");
 
     $total = <<<SQL
-      select count(id) as count
-      from trend_words
-      where trend_word like :word
+      select
+        count(w.id) as count
+      from (
+        select w.id
+        from trend_words w
+        join trends t on w.id = t.trend_word_id
+        where w.trend_word like :word
+        group by w.id ) w
 SQL;
 
     $data = <<<SQL
@@ -528,19 +538,17 @@ SQL;
    */
   public function relatedDailyTrend($date, $trendWordId)
   {
-    $cacheFile = storage_path() . "/app/public/analyze/{$date}/{$trendWordId}.json.gz";
     $score = [];
 
-    if (
-      !file_exists($cacheFile) ||
-      !file_exists(pathinfo($cacheFile, PATHINFO_DIRNAME))
-    ) {
+    $cachePath = sprintf('%s/%s/%d.json.gz', config('constants.analyze_path'), $date, $trendWordId);
+
+    if (!Storage::exists($cachePath)) {
       goto POST_CALC;
     }
 
-    $base = json_decode(join('', gzfile($cacheFile)), true);
-    foreach (glob(pathinfo($cacheFile, PATHINFO_DIRNAME) . '/*.json.gz') as $file) {
-      $data = json_decode(join('', gzfile($file)), true);
+    $base = json_decode(gzdecode(Storage::get($cachePath)), true);
+    foreach (Storage::files(pathinfo($cachePath, PATHINFO_DIRNAME)) as $file) {
+      $data = json_decode(gzdecode(Storage::get($file)), true);
       $count = count($base['word_weights']) < count($data['word_weights']) ? count($base['word_weights']) : count($data['word_weights']);
       $count = $count < 30 ? $count : 30;
 
@@ -583,11 +591,28 @@ SQL;
 
     $dayBefore = Carbon::parse($date)->subDay()->format('Y-m-d');
     $dayAfter = Carbon::parse($date)->addDay()->format('Y-m-d');
+    $dayBeforeHasArchive = Storage::exists(
+      sprintf(
+        '%s/%s/%d.json.gz',
+        config('constants.analyze_path'),
+        $dayAfter,
+        $trendWordId
+      )
+    );
+    $dayAfterHasArchive = Storage::exists(
+      sprintf(
+        '%s/%s/%d.json.gz',
+        config('constants.analyze_path'),
+        $dayAfter,
+        $trendWordId
+      )
+    );
+
     return [
       'status' => 'success',
       'date' => $date,
-      'day_before' => file_exists(storage_path() . "/app/public/analyze/{$dayBefore}/{$trendWordId}.json.gz") ? $dayBefore : null,
-      'day_after' => file_exists(storage_path() . "/app/public/analyze/{$dayAfter}/{$trendWordId}.json.gz") ? $dayAfter : null,
+      'day_before' => $dayBeforeHasArchive ? $dayBefore : null,
+      'day_after' => $dayAfterHasArchive ? $dayAfter : null,
       'trend_word_id' => $trendWordId,
       'list' => $list
     ];
