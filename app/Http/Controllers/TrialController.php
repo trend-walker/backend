@@ -101,4 +101,15 @@ class TrialController extends Controller
     return response($this->trendService->analyseTrendTweets($trendId))
       ->header('Content-Type', 'application/json');
   }
+
+  /**
+   * 関連トレンドワード
+   * 
+   * @param string $date
+   */
+  public function relatedTrends($date)
+  {
+    return response($this->trendService->calcTrendRelations($date))
+      ->header('Content-Type', 'application/json');
+  }
 }

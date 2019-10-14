@@ -26,6 +26,8 @@ Route::group(['prefix' => 'trial'], function () {
     Route::get('/get_tweets/{trendId}', 'TrialController@getTweets')->name('trial.get.rawTweets');
     // analyze from trend_id
     Route::get('/analyze_tweets/{trendId}', 'TrialController@analyzeTweets')->name('trial.get.analyzeTrend');
+    // related trends
+    Route::get('/related_trends/{date}', 'TrialController@relatedTrends')->name('trial.get.relatedTrends');
   });
 });
 

@@ -2,14 +2,11 @@
 
 namespace Tests\Feature;
 
-use Mockery;
-
 use Tests\TestCase;
 use Illuminate\Foundation\Testing\WithFaker;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 
-use Illuminate\Support\Facades\Artisan;
-use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Carbon;
 
 use App\Services\TwitterApi;
 
@@ -18,10 +15,7 @@ use App\Services\TwitterApi;
  */
 class TwitterApiTest extends TestCase
 {
-  /**
-   * @var TwitterApi $twitterApi
-   */
-  protected $twitterApi;
+  use TestUtil;
 
   /**
    * テスト準備
@@ -32,22 +26,47 @@ class TwitterApiTest extends TestCase
   {
     parent::setUp();
 
-    Artisan::call('cache:clear');
-    Artisan::call('config:clear');
-    Storage::deleteDirectory('testing');
-
-    // モック作成
-    $mock = Mockery::mock(TwitterApi::class);
-    $mock->shouldReceive('getTrends')
-      ->andReturn(json_decode(file_get_contents(base_path() . '/tests/MockData/api_trends-place.json'), true));
-    $mock->shouldReceive('searchTweets')
-      ->andReturn(json_decode(file_get_contents(base_path() . '/tests/MockData/api_search-tweets.json'), true));
-
-    // モック適用
-    $this->instance(TwitterApi::class, $mock);
-
-    // モック適用インスタンス
+    // スタブを有効化
+    $this->activateTwitterApiStub();
+    // スタブ適用インスタンス
     $this->twitterApi = app()->make(TwitterApi::class);
+  }
+
+  /**
+   * 日付ID相互変換チェック
+   */
+  public function testTwitterApiIdTimestamp()
+  {
+    /**
+     * id, timestamp 相互変比較
+     * 
+     * @param int $id
+     * @param string $timeText
+     * @return boolean
+     */
+    function comp($id, $text)
+    {
+      $timestampId = TwitterApi::idToimestamp($id);
+      $dateId = Carbon::createFromTimestampUTC($timestampId);
+      $dateText = Carbon::parse($text);
+      $textId = TwitterApi::timestampToId($dateText->getTimestamp());
+      return $id == $textId &&
+        $dateId->format('Y-m-d H:i:s') == $dateText->format('Y-m-d H:i:s');
+    };
+
+    // Fakerデータ
+    $this->activateTwitterApiStub(true);
+    $stabTweets = app()->make(TwitterApi::class)->searchTweets('');
+    foreach ($stabTweets['statuses'] as $tweet) {
+      $this->assertTrue(comp($tweet['id'], $tweet['created_at']));
+    }
+
+    // ファイルデータ
+    $this->activateTwitterApiStub(true);
+    $fileTweets = app()->make(TwitterApi::class)->searchTweets('');
+    foreach ($fileTweets['statuses'] as $tweet) {
+      $this->assertTrue(comp($tweet['id'], $tweet['created_at']));
+    }
   }
 
   /**
@@ -112,7 +131,7 @@ class TwitterApiTest extends TestCase
       $this->assertTrue(preg_match('/\A\d+\z/', $tweet['id_str']) == 1);
       $this->assertTrue(
         array_key_exists('text', $tweet) && is_string($tweet['text']) ||
-        array_key_exists('full_text', $tweet) && is_string($tweet['full_text'])
+          array_key_exists('full_text', $tweet) && is_string($tweet['full_text'])
       );
       $this->assertTrue(is_int($tweet['retweet_count']));
       $this->assertTrue(is_int($tweet['favorite_count']));

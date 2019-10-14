@@ -8,7 +8,6 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\File;
 
 use \SplFileObject;
-use \Datetime;
 use \Exception;
 use \Throwabe;
 use App\Model\Trend;
@@ -64,7 +63,7 @@ class TrendService
     $arcPath = sprintf(
       '%s/%s/trend_tweets%d.json.gz',
       config('constants.archive_path'),
-      (new Datetime($trend->trend_time))->format('Y-m-d'),
+      Carbon::parse($trend->trend_time)->format('Y-m-d'),
       $trendId
     );
 
@@ -92,7 +91,7 @@ class TrendService
     $arcPath = sprintf(
       '%s/%s/trend_tweets%d.json.gz',
       config('constants.archive_path'),
-      (new Datetime($trend->trend_time))->format('Y-m-d'),
+      Carbon::parse($trend->trend_time)->format('Y-m-d'),
       $trendId
     );
 
@@ -150,8 +149,8 @@ class TrendService
     order by tweet_volume desc limit :limit
 SQL;
     return DB::select($sql, [
-      'from' => (new Datetime($date))->format('Y-m-d 00:00:00'),
-      'to' => (new Datetime($date))->format('Y-m-d 23:59:59'),
+      'from' => Carbon::parse($date)->format('Y-m-d 00:00:00'),
+      'to' => Carbon::parse($date)->format('Y-m-d 23:59:59'),
       'limit' => $limit,
     ]);
   }
@@ -180,14 +179,15 @@ SQL;
    * デイリー・個別トレンドワード
    * SSR用なのでHTTPステータスで返す
    * 
-   * @param string $date
+   * @param string $dateText
    * @param int $trendId
    * @return array|null
    */
-  public function dailyTrendWord($date, $trendWordId)
+  public function dailyTrendWord($dateText, $trendWordId)
   {
-    $from = (new Datetime($date))->format('Y-m-d 00:00:00');
-    $to = (new Datetime($date))->format('Y-m-d 23:59:59');
+    $date = Carbon::parse($dateText);
+    $from = $date->format('Y-m-d 00:00:00');
+    $to = $date->format('Y-m-d 23:59:59');
 
     $trend = Trend::where('trend_word_id', $trendWordId)
       ->whereBetween('trends.trend_time', [$from, $to])
@@ -198,10 +198,30 @@ SQL;
     if (empty($trend) || empty($trendWord)) {
       return ['status' => 404, 'message', 'データが見つかりません。'];
     } else {
+      $dayBefore = $date->copy()->subDay()->format('Y-m-d');
+      $dayAfter = $date->copy()->addDay()->format('Y-m-d');
+      $dayBeforeHasArchive = Storage::exists(
+        sprintf(
+          '%s/%s/%d.json.gz',
+          config('constants.analyze_path'),
+          $dayBefore,
+          $trendWordId
+        )
+      );
+      $dayAfterHasArchive = Storage::exists(
+        sprintf(
+          '%s/%s/%d.json.gz',
+          config('constants.analyze_path'),
+          $dayAfter,
+          $trendWordId
+        )
+      );
       return [
         'status' => 200,
         'date' => $date,
-        'trend_word' => $trendWord->trend_word
+        'trend_word' => $trendWord->trend_word,
+        'day_before' => $dayBeforeHasArchive ? $dayBefore : null,
+        'day_after' => $dayAfterHasArchive ? $dayAfter : null,
       ];
     }
   }
@@ -229,8 +249,8 @@ SQL;
 SQL;
     return DB::select($sql, [
       'id' => $trendWordId,
-      'from' => (new Datetime($date))->format('Y-m-d 00:00:00'),
-      'to' => (new Datetime($date))->format('Y-m-d 23:59:59')
+      'from' => Carbon::parse($date)->format('Y-m-d 00:00:00'),
+      'to' => Carbon::parse($date)->format('Y-m-d 23:59:59')
     ]);
   }
 
@@ -249,8 +269,8 @@ SQL;
    */
   public function analyseDailyTrendTweets($date, $trendWordId)
   {
-    $from = (new Datetime($date))->format('Y-m-d 00:00:00');
-    $to = (new Datetime($date))->format('Y-m-d 23:59:59');
+    $from = Carbon::parse($date)->format('Y-m-d 00:00:00');
+    $to = Carbon::parse($date)->format('Y-m-d 23:59:59');
 
     $trends = Trend::where('trend_word_id', $trendWordId)
       ->whereBetween('trend_time', [$from, $to])
@@ -589,32 +609,74 @@ SQL;
       return $a['score'] == $b['score'] ? 0 : ($a['score'] < $b['score'] ? 1 : -1);
     });
 
-    $dayBefore = Carbon::parse($date)->subDay()->format('Y-m-d');
-    $dayAfter = Carbon::parse($date)->addDay()->format('Y-m-d');
-    $dayBeforeHasArchive = Storage::exists(
-      sprintf(
-        '%s/%s/%d.json.gz',
-        config('constants.analyze_path'),
-        $dayAfter,
-        $trendWordId
-      )
-    );
-    $dayAfterHasArchive = Storage::exists(
-      sprintf(
-        '%s/%s/%d.json.gz',
-        config('constants.analyze_path'),
-        $dayAfter,
-        $trendWordId
-      )
-    );
-
     return [
       'status' => 'success',
       'date' => $date,
-      'day_before' => $dayBeforeHasArchive ? $dayBefore : null,
-      'day_after' => $dayAfterHasArchive ? $dayAfter : null,
       'trend_word_id' => $trendWordId,
       'list' => $list
     ];
+  }
+
+  /**
+   * 関連デイリートレンド演算
+   *
+   * @param string $date 日付
+   * @param int $limitWords 最大比較ワード数
+   * @param float $threshold 関連判定閾値
+   * @return array
+   */
+  public function calcTrendRelations($date, $limitWords = 30, $threshold = 0.24)
+  {
+    // Storage Path
+    $cacheDir = sprintf('%s/%s', config('constants.analyze_path'), $date);
+
+    // 比較トレンド情報先読み
+    $list = [];
+    foreach (Storage::files($cacheDir) as $file) {
+      $name = pathinfo($file, PATHINFO_BASENAME);
+      if ($name !== 'relations.json.gz') {
+        $list[] = [
+          'id' => (int) $name,
+          'words' => json_decode(gzdecode(Storage::get($file)), true)
+        ];
+      }
+    }
+
+    // 関連ID無向グラフ
+    $idGraph = [];
+    for ($a = 0, $len = count($list); $a < $len; ++$a) {
+      $base = $list[$a];
+      // 比較元ワード
+      $baseWords = [];
+      foreach (array_chunk($base['words']['word_weights'], $limitWords)[0] as $word) {
+        $baseWords[$word['text']] = $word['size'];
+      }
+      $idGraph[$base['id']] = [];
+      for ($b = $a + 1; $b < $len; ++$b) {
+        $data = $list[$b];
+        // 比較ワード数
+        $count = count($base['words']['word_weights']) < count($data['words']['word_weights'])
+          ? count($base['words']['word_weights'])
+          : count($data['words']['word_weights']);
+        $count = $count < $limitWords ? $count : $limitWords;
+        // トレンド比較の最大スコア計算
+        $max = 0;
+        for ($i = 0; $i < $count; ++$i) {
+          $max += $base['words']['word_weights'][$i]['size'] * $data['words']['word_weights'][$i]['size'];
+        }
+        // トレンド比較スコア計算
+        $cur = 0;
+        foreach ($data['words']['word_weights'] as $word) {
+          if (array_key_exists($word['text'], $baseWords)) {
+            $cur += $word['size'] * $baseWords[$word['text']];
+          }
+        }
+        // スコアの閾値でで関連トレンド判定
+        if ($cur / $max > $threshold) {
+          $idGraph[$base['id']][] = $data['id'];
+        }
+      }
+    }
+    return $idGraph;
   }
 }
